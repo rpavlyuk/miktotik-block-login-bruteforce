@@ -1,0 +1,64 @@
+### MIKROTIK login bruteforce blocking script
+### By Roman Pavlyuk
+
+/log
+:global maxattampt 3
+:global errorArray [:toarray ""]
+:global failmsg  "login failure for user "
+:global frommsg  " from "
+:global viamsg   " via "
+:global listfail "list_failed_attempt"
+:global whitelist "bf_whitelist"
+
+:foreach rlog in=[find where message~("^".$failmsg)] do={
+
+    :local rmess [get $rlog message]
+
+    :if (($rmess~$failmsg) and ($rmess~$frommsg) and ($rmess~$viamsg)) do={
+
+        :local userinside [:pick $rmess ([:find $rmess $failmsg -1] + [:len $failmsg]) [:find $rmess $frommsg -1]]
+        :local ipinside   [:pick $rmess ([:find $rmess $frommsg -1] + [:len $frommsg]) [:find $rmess $viamsg -1]]
+        :local intinside  [:pick $rmess ([:find $rmess $viamsg -1] + [:len $viamsg]) [:len $rmess]]
+
+        #:log info ("Processing: IP [" . $ipinside . "], user [" . $userinside . "], intinside [" . $intinside . "]);
+
+        # Skip trusted networks
+        :local trusted false
+
+        # 192.168.0.0/16
+        :if ([:pick $ipinside 0 8] = "192.168.") do={
+            :set trusted true
+        }
+
+        # 10.10.0.0/20
+        :if ([:pick $ipinside 0 6] = "10.10.") do={
+            :local thirdOctet [:pick $ipinside 6 [:find $ipinside "." 6]]
+            :if ($thirdOctet < 16) do={
+                :set trusted true
+            }
+        }
+
+        :if ($trusted = true) do={
+
+            :log debug ("BF: trusted IP ignored " . $ipinside);
+
+        } else={
+
+            :if ([:typeof (($errorArray)->$ipinside)] = "nothing") do={
+                :set (($errorArray)->$ipinside) 1
+            } else={
+                :set (($errorArray)->$ipinside) ((($errorArray)->$ipinside) + 1)
+            }
+
+            :if ((($errorArray)->$ipinside) > ($maxattampt - 1)) do={
+                :local existing [/ip firewall address-list find where list=$listfail and address=$ipinside]
+                :if ([:len $existing] > 0) do={
+                    /ip firewall address-list set $existing timeout=72h
+                } else={
+                    # :local safeMsg [:pick $rmess 0 100]
+                    /ip firewall address-list add list=$listfail address=$ipinside comment="$rmess" timeout=72h
+                }
+            }
+        }
+    }
+}
